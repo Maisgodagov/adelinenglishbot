@@ -1,0 +1,26 @@
+{
+  "name": "english-course-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for English course sales funnel",
+  "main": "dist/bot.js",
+  "scripts": {
+    "start": "node dist/bot.js",
+    "dev": "ts-node src/bot.ts",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "heroku-postbuild": "npm run build"
+  },
+  "keywords": ["telegram", "bot", "english", "course"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  }
+}
