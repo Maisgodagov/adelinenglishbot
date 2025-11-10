@@ -301,24 +301,18 @@ bot.on("callback_query", async (query) => {
       await Analytics.paymentInitiated(chatId, parseInt(paymentAmount));
       await Analytics.funnelStep(chatId, 'payment_initiated');
 
-      // Создаём платёжную ссылку ЮKassa
-      const { paymentId, paymentUrl } = await createYooKassaPayment(chatId);
-
-      // Сохраняем paymentId в состояние пользователя
-      userStates.set(chatId, { ...state!, paymentId, step: "awaiting_payment" });
-
+      // Временно: отправляем на связь с админом вместо платежки
       await bot.sendMessage(
         chatId,
-        "💳 *Для оплаты перейдите по ссылке ниже:*\n\n" +
-          "После успешной оплаты доступ к курсу придёт автоматически! ✅\n\n" +
-          "💰 Сумма: 1000₽\n\n" +
-          `Если возникли проблемы, пишите: ${supportContact}`,
+        "💳 *Для оплаты курса свяжитесь с администратором:*\n\n" +
+          `👉 ${supportContact}\n\n` +
+          "После оплаты администратор выдаст вам доступ к курсу! ✅\n\n" +
+          "💰 Стоимость: 1000₽",
         {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
-              [{ text: "💳 Оплатить через ЮKassa", url: paymentUrl }],
-              [{ text: "✅ Я уже оплатил", callback_data: "check_payment" }],
+              [{ text: "�� Написать администратору", url: "https://t.me/adelinteacher" }],
             ],
           },
         }
