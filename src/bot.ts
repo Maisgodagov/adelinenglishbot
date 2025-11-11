@@ -1,9 +1,9 @@
 import TelegramBot from "node-telegram-bot-api";
 import * as dotenv from "dotenv";
 import express from "express";
-import { v4 as uuidv4 } from 'uuid';
-import { YooCheckout, ICreatePayment } from '@a2seven/yoo-checkout';
-import { Analytics } from './analytics';
+import { v4 as uuidv4 } from "uuid";
+import { YooCheckout, ICreatePayment } from "@a2seven/yoo-checkout";
+import { Analytics } from "./analytics";
 
 dotenv.config();
 
@@ -21,7 +21,10 @@ const webhookPort = parseInt(process.env.WEBHOOK_PORT || "3000");
 const serverUrl = process.env.SERVER_URL || "http://localhost:3000";
 
 // Инициализация ЮKassa SDK
-const checkout = new YooCheckout({ shopId: yookassaShopId, secretKey: yookassaSecretKey });
+const checkout = new YooCheckout({
+  shopId: yookassaShopId,
+  secretKey: yookassaSecretKey,
+});
 
 // Хранилище для состояний пользователей (в продакшене использовать БД)
 interface UserState {
@@ -75,29 +78,34 @@ const wantDetailsKeyboard = {
 };
 
 // Функция для создания платежа через ЮKassa
-async function createYooKassaPayment(chatId: number): Promise<{ paymentId: string; paymentUrl: string }> {
+async function createYooKassaPayment(
+  chatId: number
+): Promise<{ paymentId: string; paymentUrl: string }> {
   const idempotenceKey = uuidv4();
 
   try {
     // Создаём платёж через ЮKassa API
-    const payment = await checkout.createPayment({
-      amount: {
-        value: paymentAmount,
-        currency: 'RUB'
+    const payment = await checkout.createPayment(
+      {
+        amount: {
+          value: paymentAmount,
+          currency: "RUB",
+        },
+        confirmation: {
+          type: "redirect",
+          return_url: `${serverUrl}/payment/success`,
+        },
+        capture: true, // Автоматическое списание
+        description: "Букварь английского языка",
+        metadata: {
+          chatId: chatId.toString(), // Сохраняем chatId в метаданных
+        },
       },
-      confirmation: {
-        type: 'redirect',
-        return_url: `${serverUrl}/payment/success`
-      },
-      capture: true, // Автоматическое списание
-      description: 'Букварь английского языка',
-      metadata: {
-        chatId: chatId.toString() // Сохраняем chatId в метаданных
-      }
-    }, idempotenceKey);
+      idempotenceKey
+    );
 
     if (!payment.id || !payment.confirmation?.confirmation_url) {
-      throw new Error('Failed to create payment');
+      throw new Error("Failed to create payment");
     }
 
     // Сохраняем связь paymentId -> chatId
@@ -105,10 +113,10 @@ async function createYooKassaPayment(chatId: number): Promise<{ paymentId: strin
 
     return {
       paymentId: payment.id,
-      paymentUrl: payment.confirmation.confirmation_url
+      paymentUrl: payment.confirmation.confirmation_url,
     };
   } catch (error) {
-    console.error('Ошибка создания платежа ЮKassa:', error);
+    console.error("Ошибка создания платежа ЮKassa:", error);
     throw error;
   }
 }
@@ -143,8 +151,8 @@ bot.on("contact", async (msg) => {
   const firstName = contact?.first_name || msg.from?.first_name || "друг";
 
   // Трекаем получение контакта
-  await Analytics.contactShared(chatId, contact?.phone_number || '');
-  await Analytics.funnelStep(chatId, 'contact_received');
+  await Analytics.contactShared(chatId, contact?.phone_number || "");
+  await Analytics.funnelStep(chatId, "contact_received");
 
   userStates.set(chatId, {
     step: "subscription_check",
@@ -184,7 +192,7 @@ bot.on("callback_query", async (query) => {
   const state = userStates.get(chatId);
 
   // Трекаем нажатия на кнопки
-  await Analytics.buttonClicked(chatId, data || 'unknown');
+  await Analytics.buttonClicked(chatId, data || "unknown");
 
   await bot.answerCallbackQuery(query.id);
 
@@ -195,7 +203,7 @@ bot.on("callback_query", async (query) => {
       if (isSubscribed) {
         // Трекаем успешную подписку
         await Analytics.channelSubscribed(chatId, channelId);
-        await Analytics.funnelStep(chatId, 'subscribed');
+        await Analytics.funnelStep(chatId, "subscribed");
 
         userStates.set(chatId, { ...state!, step: "warming" });
 
@@ -272,7 +280,7 @@ bot.on("callback_query", async (query) => {
       );
 
       // Трекаем показ продукта
-      await Analytics.funnelStep(chatId, 'product_shown');
+      await Analytics.funnelStep(chatId, "product_shown");
 
       await bot.sendMessage(
         chatId,
@@ -286,7 +294,9 @@ bot.on("callback_query", async (query) => {
         {
           parse_mode: "Markdown",
           reply_markup: {
-            inline_keyboard: [[{ text: "💳 Оплатить 1000₽", callback_data: "payment" }]],
+            inline_keyboard: [
+              [{ text: "💳 Оплатить 1000₽", callback_data: "payment" }],
+            ],
           },
         }
       );
@@ -299,20 +309,30 @@ bot.on("callback_query", async (query) => {
     case "payment":
       // Трекаем начало оплаты
       await Analytics.paymentInitiated(chatId, parseInt(paymentAmount));
-      await Analytics.funnelStep(chatId, 'payment_initiated');
+      await Analytics.funnelStep(chatId, "payment_initiated");
 
-      // Временно: отправляем на связь с админом вместо платежки
+      // Создаём платёжную ссылку ЮKassa
+      const { paymentId, paymentUrl } = await createYooKassaPayment(chatId);
+
+      // Сохраняем paymentId в состояние пользователя
+      userStates.set(chatId, {
+        ...state!,
+        paymentId,
+        step: "awaiting_payment",
+      });
+
       await bot.sendMessage(
         chatId,
-        "💳 *Для оплаты курса свяжитесь с администратором:*\n\n" +
-          `👉 ${supportContact}\n\n` +
-          "После оплаты администратор выдаст вам доступ к курсу! ✅\n\n" +
-          "💰 Стоимость: 1000₽",
+        "💳 *Для оплаты перейдите по ссылке ниже:*\n\n" +
+          "После успешной оплаты доступ к курсу придёт автоматически! ✅\n\n" +
+          "💰 Сумма: 1000₽\n\n" +
+          `Если возникли проблемы, пишите: ${supportContact}`,
         {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
-              [{ text: "�� Написать администратору", url: "https://t.me/adelinteacher" }],
+              [{ text: "💳 Оплатить через ЮKassa", url: paymentUrl }],
+              [{ text: "✅ Я уже оплатил", callback_data: "check_payment" }],
             ],
           },
         }
@@ -346,9 +366,13 @@ async function handleSuccessfulPayment(chatId: number) {
   const state = userStates.get(chatId);
 
   // Трекаем успешную оплату и выдачу доступа
-  await Analytics.paymentSuccess(chatId, parseInt(paymentAmount), state?.paymentId || 'unknown');
+  await Analytics.paymentSuccess(
+    chatId,
+    parseInt(paymentAmount),
+    state?.paymentId || "unknown"
+  );
   await Analytics.courseAccessGranted(chatId);
-  await Analytics.funnelStep(chatId, 'course_access_granted');
+  await Analytics.funnelStep(chatId, "course_access_granted");
 
   userStates.set(chatId, { ...state!, hasPaid: true, step: "paid" });
 
@@ -379,7 +403,9 @@ function scheduleReminder(chatId: number) {
           "Хочешь успеть забрать по старой цене?",
         {
           reply_markup: {
-            inline_keyboard: [[{ text: "💳 Оплатить 1000₽", callback_data: "payment" }]],
+            inline_keyboard: [
+              [{ text: "💳 Оплатить 1000₽", callback_data: "payment" }],
+            ],
           },
         }
       );
@@ -392,14 +418,14 @@ function scheduleReminder(chatId: number) {
 // Команда для показа своего ID
 bot.onText(/\/myid/, async (msg) => {
   const chatId = msg.chat.id;
-  const userName = msg.from?.first_name || 'пользователь';
+  const userName = msg.from?.first_name || "пользователь";
 
   await bot.sendMessage(
     chatId,
     `👤 Привет, ${userName}!\n\n` +
-    `Твой Telegram ID: \`${chatId}\`\n\n` +
-    `Этот ID используется для идентификации в системе.`,
-    { parse_mode: 'Markdown' }
+      `Твой Telegram ID: \`${chatId}\`\n\n` +
+      `Этот ID используется для идентификации в системе.`,
+    { parse_mode: "Markdown" }
   );
 });
 
@@ -440,7 +466,9 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
         // Обрабатываем успешную оплату
         await handleSuccessfulPayment(chatId);
 
-        console.log(`✅ Доступ выдан пользователю ${chatId}, платёж ${paymentId}`);
+        console.log(
+          `✅ Доступ выдан пользователю ${chatId}, платёж ${paymentId}`
+        );
 
         // Удаляем из Map после обработки
         paymentToChatId.delete(paymentId);
@@ -450,9 +478,13 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
         if (chatIdFromMetadata) {
           const chatIdNum = parseInt(chatIdFromMetadata);
           await handleSuccessfulPayment(chatIdNum);
-          console.log(`✅ Доступ выдан пользователю ${chatIdNum} (из metadata), платёж ${paymentId}`);
+          console.log(
+            `✅ Доступ выдан пользователю ${chatIdNum} (из metadata), платёж ${paymentId}`
+          );
         } else {
-          console.error(`❌ Не найден пользователь для paymentId: ${paymentId}`);
+          console.error(
+            `❌ Не найден пользователь для paymentId: ${paymentId}`
+          );
         }
       }
     }
@@ -513,7 +545,9 @@ app.get("/payment/success", (req, res) => {
         <p>Спасибо за покупку курса "Букварь английского"!</p>
         <p>Доступ к курсу придёт в Telegram-боте в течение 1-2 минут.</p>
         <p><strong>Вернитесь в Telegram и проверьте сообщения от бота.</strong></p>
-        <a href="https://t.me/${process.env.BOT_USERNAME || ''}" class="button">Открыть бота</a>
+        <a href="https://t.me/${
+          process.env.BOT_USERNAME || ""
+        }" class="button">Открыть бота</a>
       </div>
     </body>
     </html>
