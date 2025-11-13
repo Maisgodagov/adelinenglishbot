@@ -39,6 +39,8 @@ interface UserState {
 const userStates = new Map<number, UserState>();
 // Связь paymentId -> chatId для обработки webhook от ЮMoney
 const paymentToChatId = new Map<string, number>();
+// Множество обработанных платежей (чтобы избежать дублирования)
+const processedPayments = new Set<string>();
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -467,6 +469,16 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
     if (notification.event === "payment.succeeded") {
       const payment = notification.object;
       const paymentId = payment.id;
+
+      // Проверяем, был ли этот платёж уже обработан
+      if (processedPayments.has(paymentId)) {
+        console.log(
+          `⚠️ Платёж ${paymentId} уже был обработан, пропускаем`
+        );
+        res.status(200).json({ success: true });
+        return;
+      }
+
       const chatId = paymentToChatId.get(paymentId);
 
       if (chatId) {
@@ -476,6 +488,9 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
         console.log(
           `✅ Доступ выдан пользователю ${chatId}, платёж ${paymentId}`
         );
+
+        // Добавляем в множество обработанных платежей
+        processedPayments.add(paymentId);
 
         // Удаляем из Map после обработки
         paymentToChatId.delete(paymentId);
@@ -488,6 +503,9 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
           console.log(
             `✅ Доступ выдан пользователю ${chatIdNum} (из metadata), платёж ${paymentId}`
           );
+
+          // Добавляем в множество обработанных платежей
+          processedPayments.add(paymentId);
         } else {
           console.error(
             `❌ Не найден пользователь для paymentId: ${paymentId}`
