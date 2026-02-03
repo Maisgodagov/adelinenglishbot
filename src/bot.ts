@@ -89,6 +89,15 @@ const channelKeyboard = {
   inline_keyboard: [[{ text: "Перейти в канал", url: channelLink }]],
 };
 
+async function sendVideoNoteFromUrl(chatId: number, url: string) {
+  return bot.sendVideoNote(
+    chatId,
+    { url },
+    { duration: 60, length: 640 },
+    { contentType: "video/mp4" }
+  );
+}
+
 async function createYooKassaPayment(
   chatId: number
 ): Promise<{ paymentId: string; paymentUrl: string }> {
@@ -153,7 +162,7 @@ bot.on("callback_query", async (query) => {
         { chat_id: chatId, message_id: messageId }
       );
 
-      await bot.sendVideoNote(chatId, videoIntro);
+      await sendVideoNoteFromUrl(chatId, videoIntro);
       await bot.sendMessage(chatId, "Жми кнопку ниже:", {
         reply_markup: marathonDescriptionKeyboard,
       });
@@ -196,7 +205,7 @@ bot.on("callback_query", async (query) => {
         reply_markup: marathonLinksKeyboard,
       });
 
-      await bot.sendVideoNote(chatId, videoMarathonGoodLuck);
+      await sendVideoNoteFromUrl(chatId, videoMarathonGoodLuck);
       break;
 
     case "marathon_done":
@@ -205,7 +214,7 @@ bot.on("callback_query", async (query) => {
         { chat_id: chatId, message_id: messageId }
       );
 
-      await bot.sendVideoNote(chatId, videoPraise);
+      await sendVideoNoteFromUrl(chatId, videoPraise);
       await bot.sendMessage(chatId, "Хочешь учиться дальше?", {
         reply_markup: continueStudyKeyboard,
       });
@@ -288,7 +297,7 @@ async function handleSuccessfulPayment(chatId: number) {
     },
   });
 
-  await bot.sendVideoNote(chatId, videoCourseGoodLuck);
+  await sendVideoNoteFromUrl(chatId, videoCourseGoodLuck);
 
   await bot.sendMessage(chatId, "Чат курса:", {
     reply_markup: {
