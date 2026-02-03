@@ -92,9 +92,9 @@ const channelKeyboard = {
 async function sendVideoNoteFromUrl(chatId: number, url: string) {
   return bot.sendVideoNote(
     chatId,
-    { url },
+    url,
     { duration: 60, length: 640 },
-    { contentType: "video/mp4" }
+    { filename: "video.mp4", contentType: "video/mp4" }
   );
 }
 
