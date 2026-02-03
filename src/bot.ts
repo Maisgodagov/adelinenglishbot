@@ -89,6 +89,10 @@ const channelKeyboard = {
   inline_keyboard: [[{ text: "Перейти в канал", url: channelLink }]],
 };
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function sendVideoNoteFromFile(chatId: number, filePath: string) {
   return bot.sendVideoNote(
     chatId,
@@ -163,6 +167,7 @@ bot.on("callback_query", async (query) => {
       );
 
       await sendVideoNoteFromFile(chatId, videoIntro);
+      await sleep(2500);
       await bot.sendMessage(chatId, "Жми кнопку ниже:", {
         reply_markup: marathonDescriptionKeyboard,
       });
@@ -201,11 +206,11 @@ bot.on("callback_query", async (query) => {
         { chat_id: chatId, message_id: messageId }
       );
 
+      await sendVideoNoteFromFile(chatId, videoMarathonGoodLuck);
+      await sleep(2500);
       await bot.sendMessage(chatId, "Ссылки на марафон:", {
         reply_markup: marathonLinksKeyboard,
       });
-
-      await sendVideoNoteFromFile(chatId, videoMarathonGoodLuck);
       break;
 
     case "marathon_done":
@@ -215,6 +220,7 @@ bot.on("callback_query", async (query) => {
       );
 
       await sendVideoNoteFromFile(chatId, videoPraise);
+      await sleep(2500);
       await bot.sendMessage(chatId, "Хочешь учиться дальше?", {
         reply_markup: continueStudyKeyboard,
       });
@@ -291,13 +297,14 @@ async function handleSuccessfulPayment(chatId: number) {
 
   userStates.set(chatId, { ...state!, hasPaid: true, step: "paid" });
 
+  await sendVideoNoteFromFile(chatId, videoCourseGoodLuck);
+
+  await sleep(2500);
   await bot.sendMessage(chatId, "Доступ к курсу открыт! Перейдите по кнопке:", {
     reply_markup: {
       inline_keyboard: [[{ text: "Открыть курс", url: courseLink }]],
     },
   });
-
-  await sendVideoNoteFromFile(chatId, videoCourseGoodLuck);
 
   await bot.sendMessage(chatId, "Чат курса:", {
     reply_markup: {
