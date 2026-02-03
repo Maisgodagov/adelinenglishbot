@@ -45,6 +45,7 @@ interface UserState {
 const userStates = new Map<number, UserState>();
 const paymentToChatId = new Map<string, number>();
 const processedPayments = new Set<string>();
+const orderToPaymentId = new Map<string, string>();
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -106,6 +107,7 @@ async function createYooKassaPayment(
   chatId: number
 ): Promise<{ paymentId: string; paymentUrl: string }> {
   const idempotenceKey = uuidv4();
+  const orderId = uuidv4();
 
   const payment = await checkout.createPayment(
     {
@@ -115,12 +117,13 @@ async function createYooKassaPayment(
       },
       confirmation: {
         type: "redirect",
-        return_url: `${serverUrl}/payment/success`,
+        return_url: `${serverUrl}/payment/return?order_id=${orderId}`,
       },
       capture: true,
       description: "Марафон 2-й урок. Работа",
       metadata: {
         chatId: chatId.toString(),
+        orderId,
       },
     },
     idempotenceKey
@@ -131,6 +134,7 @@ async function createYooKassaPayment(
   }
 
   paymentToChatId.set(payment.id, chatId);
+  orderToPaymentId.set(orderId, payment.id);
 
   return {
     paymentId: payment.id,
@@ -380,8 +384,128 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
   }
 });
 
-app.get("/payment/success", (req, res) => {
-  res.send(`
+app.get("/payment/return", async (req, res) => {
+  try {
+    const orderId = typeof req.query.order_id === "string" ? req.query.order_id : "";
+    const paymentId = orderId ? orderToPaymentId.get(orderId) : undefined;
+
+    let isSuccess = false;
+    if (paymentId) {
+      const payment = await checkout.getPayment(paymentId);
+      isSuccess = payment?.status === "succeeded";
+    }
+
+    if (!paymentId) {
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="ru">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Платеж обрабатывается</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              min-height: 100vh;
+              margin: 0;
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .container {
+              text-align: center;
+              background: white;
+              padding: 40px;
+              border-radius: 20px;
+              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+              max-width: 500px;
+            }
+            h1 { color: #333; margin: 0 0 20px 0; }
+            p { color: #666; line-height: 1.6; margin: 10px 0; }
+            .emoji { font-size: 64px; margin-bottom: 20px; }
+            .button {
+              display: inline-block;
+              margin-top: 20px;
+              padding: 15px 30px;
+              background: #667eea;
+              color: white;
+              text-decoration: none;
+              border-radius: 10px;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="emoji">⏳</div>
+            <h1>Платеж обрабатывается</h1>
+            <p>Если оплата прошла успешно, доступ придет в Telegram-боте.</p>
+            <p>Если вы отменили оплату — просто вернитесь в бота.</p>
+            <a href="https://t.me/adelinClassBot" class="button">Открыть бота</a>
+          </div>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
+    if (!isSuccess) {
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="ru">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Оплата не завершена</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              min-height: 100vh;
+              margin: 0;
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .container {
+              text-align: center;
+              background: white;
+              padding: 40px;
+              border-radius: 20px;
+              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+              max-width: 500px;
+            }
+            h1 { color: #E53935; margin: 0 0 20px 0; }
+            p { color: #666; line-height: 1.6; margin: 10px 0; }
+            .emoji { font-size: 64px; margin-bottom: 20px; }
+            .button {
+              display: inline-block;
+              margin-top: 20px;
+              padding: 15px 30px;
+              background: #667eea;
+              color: white;
+              text-decoration: none;
+              border-radius: 10px;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="emoji">❌</div>
+            <h1>Оплата не завершена</h1>
+            <p>Вы отменили оплату или она еще не прошла.</p>
+            <p>Вернитесь в бот и попробуйте снова.</p>
+            <a href="https://t.me/adelinClassBot" class="button">Открыть бота</a>
+          </div>
+        </body>
+        </html>
+      `);
+      return;
+    }
+
+    res.send(`
     <!DOCTYPE html>
     <html lang="ru">
     <head>
@@ -433,6 +557,14 @@ app.get("/payment/success", (req, res) => {
     </body>
     </html>
   `);
+  } catch (error) {
+    console.error("Ошибка проверки статуса оплаты:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+app.get("/payment/success", (req, res) => {
+  res.redirect("/payment/return");
 });
 
 app.get("/health", (req, res) => {
