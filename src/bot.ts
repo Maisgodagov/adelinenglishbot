@@ -4,6 +4,8 @@ import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import { YooCheckout } from "@a2seven/yoo-checkout";
 import { Analytics } from "./analytics";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
@@ -15,14 +17,12 @@ const marathonLink =
   "https://progressme.ru/cabinet/school/marathons/marathon/116466/lessons";
 const chatLink = process.env.MARATHON_CHAT_LINK || "https://t.me/+18GWR5r4wm04OTIy";
 
-const videoIntro =
-  "https://s3.ru1.storage.beget.cloud/2df681f7f03c-mais-eglish/IMG_4486.MP4";
-const videoMarathonGoodLuck =
-  "https://s3.ru1.storage.beget.cloud/2df681f7f03c-mais-eglish/IMG_4487.MP4";
-const videoPraise =
-  "https://s3.ru1.storage.beget.cloud/2df681f7f03c-mais-eglish/IMG_4488.MP4";
-const videoCourseGoodLuck =
-  "https://s3.ru1.storage.beget.cloud/2df681f7f03c-mais-eglish/IMG_4489.MP4";
+const mediaDir =
+  process.env.MEDIA_DIR || "/var/www/adelinenglishbot/media";
+const videoIntro = path.join(mediaDir, "intro.mp4");
+const videoMarathonGoodLuck = path.join(mediaDir, "marathon_goodluck.mp4");
+const videoPraise = path.join(mediaDir, "praise.mp4");
+const videoCourseGoodLuck = path.join(mediaDir, "course_goodluck.mp4");
 
 // YooKassa settings
 const yookassaShopId = process.env.YOOKASSA_SHOP_ID!;
@@ -89,12 +89,12 @@ const channelKeyboard = {
   inline_keyboard: [[{ text: "Перейти в канал", url: channelLink }]],
 };
 
-async function sendVideoNoteFromUrl(chatId: number, url: string) {
+async function sendVideoNoteFromFile(chatId: number, filePath: string) {
   return bot.sendVideoNote(
     chatId,
-    url,
+    fs.createReadStream(filePath),
     { duration: 60, length: 640 },
-    { filename: "video.mp4", contentType: "video/mp4" }
+    { filename: path.basename(filePath), contentType: "video/mp4" }
   );
 }
 
@@ -162,7 +162,7 @@ bot.on("callback_query", async (query) => {
         { chat_id: chatId, message_id: messageId }
       );
 
-      await sendVideoNoteFromUrl(chatId, videoIntro);
+      await sendVideoNoteFromFile(chatId, videoIntro);
       await bot.sendMessage(chatId, "Жми кнопку ниже:", {
         reply_markup: marathonDescriptionKeyboard,
       });
@@ -205,7 +205,7 @@ bot.on("callback_query", async (query) => {
         reply_markup: marathonLinksKeyboard,
       });
 
-      await sendVideoNoteFromUrl(chatId, videoMarathonGoodLuck);
+      await sendVideoNoteFromFile(chatId, videoMarathonGoodLuck);
       break;
 
     case "marathon_done":
@@ -214,7 +214,7 @@ bot.on("callback_query", async (query) => {
         { chat_id: chatId, message_id: messageId }
       );
 
-      await sendVideoNoteFromUrl(chatId, videoPraise);
+      await sendVideoNoteFromFile(chatId, videoPraise);
       await bot.sendMessage(chatId, "Хочешь учиться дальше?", {
         reply_markup: continueStudyKeyboard,
       });
@@ -297,7 +297,7 @@ async function handleSuccessfulPayment(chatId: number) {
     },
   });
 
-  await sendVideoNoteFromUrl(chatId, videoCourseGoodLuck);
+  await sendVideoNoteFromFile(chatId, videoCourseGoodLuck);
 
   await bot.sendMessage(chatId, "Чат курса:", {
     reply_markup: {
