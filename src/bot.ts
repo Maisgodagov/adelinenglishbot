@@ -49,10 +49,27 @@ interface UserState {
   email?: string;
 }
 
+type AccessRequest = {
+  requestId: string;
+  userChatId: number;
+  email: string;
+  flow: "free" | "paid";
+  paymentId?: string;
+  issued?: boolean;
+};
+
+type AdminGrantState = {
+  requestId: string;
+  step: "awaiting_password" | "awaiting_course_link";
+  password?: string;
+};
+
 const userStates = new Map<number, UserState>();
 const paymentToChatId = new Map<string, number>();
 const processedPayments = new Set<string>();
 const orderToPaymentId = new Map<string, string>();
+const accessRequests = new Map<string, AccessRequest>();
+const adminGrantStates = new Map<number, AdminGrantState>();
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -118,9 +135,19 @@ async function notifyAdmins(payload: {
   chatId: number;
   telegramIdentity: string;
   email: string;
+  flow: "free" | "paid";
   paymentId?: string;
-}) {
-  if (!adminIds.length) return;
+}): Promise<string | null> {
+  if (!adminIds.length) return null;
+
+  const requestId = uuidv4();
+  accessRequests.set(requestId, {
+    requestId,
+    userChatId: payload.chatId,
+    email: payload.email,
+    flow: payload.flow,
+    paymentId: payload.paymentId,
+  });
 
   const lines = [
     payload.title,
@@ -137,11 +164,17 @@ async function notifyAdmins(payload: {
 
   for (const adminId of adminIds) {
     try {
-      await bot.sendMessage(adminId, text);
+      await bot.sendMessage(adminId, text, {
+        reply_markup: {
+          inline_keyboard: [[{ text: "Выдать доступ", callback_data: `grant_access:${requestId}` }]],
+        },
+      });
     } catch (error) {
       console.error(`Failed to notify admin ${adminId}:`, error);
     }
   }
+
+  return requestId;
 }
 
 async function createYooKassaPayment(
@@ -204,6 +237,30 @@ bot.on("callback_query", async (query) => {
   await Analytics.buttonClicked(chatId, data || "unknown");
   await bot.answerCallbackQuery(query.id);
 
+  if (data?.startsWith("grant_access:")) {
+    if (!adminIds.includes(chatId)) {
+      await bot.sendMessage(chatId, "Эта кнопка доступна только администратору.");
+      return;
+    }
+
+    const requestId = data.split(":")[1];
+    const request = accessRequests.get(requestId);
+
+    if (!request) {
+      await bot.sendMessage(chatId, "Заявка не найдена.");
+      return;
+    }
+
+    if (request.issued) {
+      await bot.sendMessage(chatId, "Доступ по этой заявке уже выдан.");
+      return;
+    }
+
+    adminGrantStates.set(chatId, { requestId, step: "awaiting_password" });
+    await bot.sendMessage(chatId, "Введите пароль отдельным сообщением.");
+    return;
+  }
+
   switch (data) {
     case "marathon_start":
       await bot.editMessageReplyMarkup(
@@ -254,7 +311,7 @@ bot.on("callback_query", async (query) => {
       userStates.set(chatId, { ...state, step: "awaiting_free_email" });
       await bot.sendMessage(
         chatId,
-        "Отправьте вашу почту для выдачи доступа к бесплатному марафону.",
+        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону.",
         { reply_markup: channelKeyboard }
       );
       break;
@@ -312,7 +369,7 @@ bot.on("callback_query", async (query) => {
 
       await bot.sendMessage(
         chatId,
-        "Перед оплатой отправьте вашу почту для выдачи доступа.",
+        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону.",
         { reply_markup: channelKeyboard }
       );
       break;
@@ -323,6 +380,53 @@ bot.on("message", async (msg) => {
   if (!msg.text || msg.text.startsWith("/")) return;
 
   const chatId = msg.chat.id;
+
+  const adminGrantState = adminGrantStates.get(chatId);
+  if (adminGrantState && adminIds.includes(chatId)) {
+    const textValue = msg.text.trim();
+    const request = accessRequests.get(adminGrantState.requestId);
+
+    if (!request) {
+      adminGrantStates.delete(chatId);
+      await bot.sendMessage(chatId, "Заявка не найдена.");
+      return;
+    }
+
+    if (request.issued) {
+      adminGrantStates.delete(chatId);
+      await bot.sendMessage(chatId, "Доступ по этой заявке уже выдан.");
+      return;
+    }
+
+    if (adminGrantState.step === "awaiting_password") {
+      adminGrantStates.set(chatId, {
+        requestId: adminGrantState.requestId,
+        step: "awaiting_course_link",
+        password: textValue,
+      });
+      await bot.sendMessage(chatId, "Теперь отправьте ссылку на курс отдельным сообщением.");
+      return;
+    }
+
+    const password = adminGrantState.password || "";
+    const courseLinkFromAdmin = textValue;
+
+    await bot.sendMessage(
+      request.userChatId,
+      "Вам выдан доступ на марафон!\n" +
+        `Логин: ${request.email}\n` +
+        `Пароль: ${password}\n` +
+        `Ссылка на марафон: ${courseLinkFromAdmin}`
+    );
+
+    request.issued = true;
+    accessRequests.set(request.requestId, request);
+    adminGrantStates.delete(chatId);
+
+    await bot.sendMessage(chatId, `Доступ выдан пользователю ${request.userChatId}.`);
+    return;
+  }
+
   const state = userStates.get(chatId);
   if (!state) return;
 
@@ -332,7 +436,10 @@ bot.on("message", async (msg) => {
 
   const email = msg.text.trim().toLowerCase();
   if (!isValidEmail(email)) {
-    await bot.sendMessage(chatId, "Похоже, это не email. Отправьте в формате name@example.com");
+    await bot.sendMessage(
+      chatId,
+      "Почта некорректная, пожалуйста отправьте вашу почту отдельным сообщением"
+    );
     return;
   }
 
@@ -346,11 +453,12 @@ bot.on("message", async (msg) => {
       chatId,
       telegramIdentity,
       email,
+      flow: "free",
     });
 
     await bot.sendMessage(
       chatId,
-      `Спасибо! Доступ будет выдан в ближайшее время.\nПри вопросах напишите ${supportContact}`,
+      `Спасибо! Доступ будет выдан в ближайшее время, мы напишем вам в телеграм. Если будут вопросы, пишите мне ${supportContact}`,
       { reply_markup: channelKeyboard }
     );
     return;
@@ -390,6 +498,7 @@ async function handleSuccessfulPayment(chatId: number) {
     chatId,
     telegramIdentity,
     email: state?.email || "email не указан",
+    flow: "paid",
     paymentId: state?.paymentId,
   });
 
@@ -398,7 +507,7 @@ async function handleSuccessfulPayment(chatId: number) {
 
   await bot.sendMessage(
     chatId,
-    `Спасибо за оплату! Доступ будет выдан в ближайшее время.\nПри вопросах напишите ${supportContact}`,
+    `Спасибо! Доступ будет выдан в ближайшее время, мы напишем вам в телеграм. Если будут вопросы, пишите мне ${supportContact}`,
     { reply_markup: channelKeyboard }
   );
 }
@@ -407,10 +516,7 @@ bot.onText(/\/myid/, async (msg) => {
   const chatId = msg.chat.id;
   const userName = msg.from?.first_name || "пользователь";
 
-  await bot.sendMessage(
-    chatId,
-    `Твой Telegram ID: ${chatId}. Пользователь: ${userName}`
-  );
+  await bot.sendMessage(chatId, `Твой Telegram ID: ${chatId}. Пользователь: ${userName}`);
 });
 
 bot.onText(/\/paid (\d+)/, async (msg, match) => {
@@ -498,7 +604,7 @@ app.get("/health", (req, res) => {
 });
 
 app.listen(webhookPort, () => {
-  console.log(`Bot started`);
+  console.log("Bot started");
   console.log(`Webhook server on ${webhookPort}`);
   console.log(`Webhook URL: ${serverUrl}/webhook/yookassa`);
   console.log(`Success URL: ${serverUrl}/payment/success`);
