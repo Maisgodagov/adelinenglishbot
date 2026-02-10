@@ -458,7 +458,7 @@ bot.on("message", async (msg) => {
 
     await bot.sendMessage(
       chatId,
-      `Спасибо! Доступ будет выдан в ближайшее время, мы напишем вам в телеграм. Если будут вопросы, пишите мне ${supportContact}`,
+      "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте.",
       { reply_markup: channelKeyboard }
     );
     return;
@@ -507,7 +507,7 @@ async function handleSuccessfulPayment(chatId: number) {
 
   await bot.sendMessage(
     chatId,
-    `Спасибо! Доступ будет выдан в ближайшее время, мы напишем вам в телеграм. Если будут вопросы, пишите мне ${supportContact}`,
+    "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте.",
     { reply_markup: channelKeyboard }
   );
 }
