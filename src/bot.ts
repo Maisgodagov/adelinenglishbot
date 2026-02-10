@@ -1,4 +1,4 @@
-import TelegramBot from "node-telegram-bot-api";
+﻿import TelegramBot from "node-telegram-bot-api";
 import * as dotenv from "dotenv";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
@@ -10,25 +10,23 @@ import path from "path";
 dotenv.config();
 
 const token = process.env.BOT_TOKEN!;
-const courseLink = process.env.COURSE_LINK || "https://example.com/course";
 const channelLink = process.env.CHANNEL_LINK || "https://t.me/adelengl";
-const marathonLink =
-  process.env.MARATHON_LINK ||
-  "https://progressme.ru/cabinet/school/marathons/marathon/116466/lessons";
-const chatLink = process.env.MARATHON_CHAT_LINK || "https://t.me/+18GWR5r4wm04OTIy";
+const supportContact = process.env.SUPPORT_CONTACT || "@adelinteacher";
+const mediaDir = process.env.MEDIA_DIR || "/var/www/adelinenglishbot/media";
+const adminIds =
+  process.env.ADMIN_IDS?.split(",")
+    .map((id) => parseInt(id.trim(), 10))
+    .filter((id) => !Number.isNaN(id)) || [];
 
-const mediaDir =
-  process.env.MEDIA_DIR || "/var/www/adelinenglishbot/media";
 const videoIntro = path.join(mediaDir, "intro.mp4");
 const videoMarathonGoodLuck = path.join(mediaDir, "marathon_goodluck.mp4");
 const videoPraise = path.join(mediaDir, "praise.mp4");
 const videoCourseGoodLuck = path.join(mediaDir, "course_goodluck.mp4");
 
-// YooKassa settings
 const yookassaShopId = process.env.YOOKASSA_SHOP_ID!;
 const yookassaSecretKey = process.env.YOOKASSA_SECRET_KEY!;
 const paymentAmount = process.env.PAYMENT_AMOUNT || "990.00";
-const webhookPort = parseInt(process.env.WEBHOOK_PORT || "3000");
+const webhookPort = parseInt(process.env.WEBHOOK_PORT || "3000", 10);
 const serverUrl = process.env.SERVER_URL || "http://localhost:3000";
 
 const checkout = new YooCheckout({
@@ -36,10 +34,19 @@ const checkout = new YooCheckout({
   secretKey: yookassaSecretKey,
 });
 
+type FlowStep =
+  | "start"
+  | "awaiting_free_email"
+  | "awaiting_paid_email"
+  | "awaiting_payment"
+  | "free_access_requested"
+  | "paid";
+
 interface UserState {
-  step: string;
+  step: FlowStep;
   hasPaid?: boolean;
   paymentId?: string;
+  email?: string;
 }
 
 const userStates = new Map<number, UserState>();
@@ -68,13 +75,6 @@ const participateKeyboard = {
   inline_keyboard: [[{ text: "Участвую", callback_data: "marathon_participate" }]],
 };
 
-const marathonLinksKeyboard = {
-  inline_keyboard: [
-    [{ text: "Ссылка на марафон", url: marathonLink }],
-    [{ text: "Чат марафона", url: chatLink }],
-  ],
-};
-
 const continueStudyKeyboard = {
   inline_keyboard: [
     [{ text: "Да", callback_data: "continue_yes" }],
@@ -94,6 +94,16 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function buildTelegramIdentity(msg: TelegramBot.Message): string {
+  const from = msg.from;
+  const username = from?.username ? `@${from.username}` : "нет username";
+  return `${username} (id: ${msg.chat.id})`;
+}
+
 async function sendVideoNoteFromFile(chatId: number, filePath: string) {
   return bot.sendVideoNote(
     chatId,
@@ -101,6 +111,37 @@ async function sendVideoNoteFromFile(chatId: number, filePath: string) {
     { duration: 60, length: 640 },
     { filename: path.basename(filePath), contentType: "video/mp4" }
   );
+}
+
+async function notifyAdmins(payload: {
+  title: string;
+  chatId: number;
+  telegramIdentity: string;
+  email: string;
+  paymentId?: string;
+}) {
+  if (!adminIds.length) return;
+
+  const lines = [
+    payload.title,
+    `Telegram: ${payload.telegramIdentity}`,
+    `Email: ${payload.email}`,
+    `Chat ID: ${payload.chatId}`,
+  ];
+
+  if (payload.paymentId) {
+    lines.push(`Payment ID: ${payload.paymentId}`);
+  }
+
+  const text = lines.join("\n");
+
+  for (const adminId of adminIds) {
+    try {
+      await bot.sendMessage(adminId, text);
+    } catch (error) {
+      console.error(`Failed to notify admin ${adminId}:`, error);
+    }
+  }
 }
 
 async function createYooKassaPayment(
@@ -186,20 +227,18 @@ bot.on("callback_query", async (query) => {
       await bot.sendMessage(
         chatId,
         "Марафон 1-й урок. Мои вещи\n" +
-          "В первое занятие входит 5 блоков \n" +
-          "Новые слова \n" +
-          "Действия \n" +
-          "Единственное и множественное число \n" +
-          "Это/То Местоимения \n" +
-          "Притяжательные местоимения \n\n" +
-          "На марафоне вы:\n\n" +
-          "-научитесь говорить на тему «Мои вещи» \n" +
-          "-запомните 50 слов \n" +
-          "-научитесь понимать английский на слух \n" +
-          "-забудете про зубрежку\n" +
-          "-изучите две грамматические темы, сами того не заметив. \n\n" +
-          "Это не магия, ребят. Так обучают на курсах для преподавателей ESL. \n\n" +
-          "Все блоки составлены так, что вы даже не почувствуете, что учитесь. Для вас это будет выглядеть, как прохождение игры.",
+          "В первое занятие входит 5 блоков\n" +
+          "Новые слова\n" +
+          "Действия\n" +
+          "Единственное и множественное число\n" +
+          "Это/То местоимения\n" +
+          "Притяжательные местоимения\n\n" +
+          "На марафоне вы:\n" +
+          "- научитесь говорить на тему «Мои вещи»\n" +
+          "- запомните 50 слов\n" +
+          "- научитесь понимать английский на слух\n" +
+          "- забудете про зубрежку\n" +
+          "- изучите две грамматические темы, сами того не заметив.",
         { reply_markup: participateKeyboard }
       );
       break;
@@ -212,9 +251,12 @@ bot.on("callback_query", async (query) => {
 
       await sendVideoNoteFromFile(chatId, videoMarathonGoodLuck);
       await sleep(2500);
-      await bot.sendMessage(chatId, "Ссылки на марафон:", {
-        reply_markup: marathonLinksKeyboard,
-      });
+      userStates.set(chatId, { ...state, step: "awaiting_free_email" });
+      await bot.sendMessage(
+        chatId,
+        "Отправьте вашу почту для выдачи доступа к бесплатному марафону.",
+        { reply_markup: channelKeyboard }
+      );
       break;
 
     case "marathon_done":
@@ -238,13 +280,13 @@ bot.on("callback_query", async (query) => {
 
       await bot.sendMessage(
         chatId,
-        "Тема Работа \n\n" +
-          "5 блоков \n\n" +
-          "-Профессии \n" +
-          "-Рабочие места \n" +
-          "-Предмет работы \n" +
-          "-Степени сравнения \n\n" +
-          "Здесь вы выучите так же 50 слов, научитесь читать тексты по больше, научитесь понимать разговоры  о работе на слух, и , что сама важное, начнете говорить.",
+        "Тема Работа\n\n" +
+          "5 блоков\n\n" +
+          "- Профессии\n" +
+          "- Рабочие места\n" +
+          "- Предмет работы\n" +
+          "- Степени сравнения\n\n" +
+          "Здесь вы выучите 50 слов, научитесь читать более длинные тексты, понимать разговоры о работе на слух и начнете говорить.",
         { reply_markup: takeCourseKeyboard }
       );
       break;
@@ -257,35 +299,74 @@ bot.on("callback_query", async (query) => {
 
       await bot.sendMessage(
         chatId,
-        "Оставайся с нами в канале, узнавай новое каждый день и учи Английский",
+        "Оставайся с нами в канале, узнавай новое каждый день и учи английский.",
         { reply_markup: channelKeyboard }
       );
       break;
 
     case "take_course":
-      await Analytics.paymentInitiated(chatId, parseInt(paymentAmount));
-      await Analytics.funnelStep(chatId, "payment_initiated");
-
-      const { paymentId, paymentUrl } = await createYooKassaPayment(chatId);
-
       userStates.set(chatId, {
         ...state,
-        paymentId,
-        step: "awaiting_payment",
+        step: "awaiting_paid_email",
       });
 
-  await bot.sendMessage(
-    chatId,
-    "Для оплаты перейдите по ссылке ниже:\n\n" +
-      "После успешной оплаты доступ придет автоматически.",
-    {
-      reply_markup: {
-        inline_keyboard: [[{ text: "Оплатить", url: paymentUrl }]],
-      },
-        }
+      await bot.sendMessage(
+        chatId,
+        "Перед оплатой отправьте вашу почту для выдачи доступа.",
+        { reply_markup: channelKeyboard }
       );
       break;
   }
+});
+
+bot.on("message", async (msg) => {
+  if (!msg.text || msg.text.startsWith("/")) return;
+
+  const chatId = msg.chat.id;
+  const state = userStates.get(chatId);
+  if (!state) return;
+
+  if (state.step !== "awaiting_free_email" && state.step !== "awaiting_paid_email") {
+    return;
+  }
+
+  const email = msg.text.trim().toLowerCase();
+  if (!isValidEmail(email)) {
+    await bot.sendMessage(chatId, "Похоже, это не email. Отправьте в формате name@example.com");
+    return;
+  }
+
+  const telegramIdentity = buildTelegramIdentity(msg);
+
+  if (state.step === "awaiting_free_email") {
+    userStates.set(chatId, { ...state, email, step: "free_access_requested" });
+
+    await notifyAdmins({
+      title: "Новая заявка: бесплатный марафон",
+      chatId,
+      telegramIdentity,
+      email,
+    });
+
+    await bot.sendMessage(
+      chatId,
+      `Спасибо! Доступ будет выдан в ближайшее время.\nПри вопросах напишите ${supportContact}`,
+      { reply_markup: channelKeyboard }
+    );
+    return;
+  }
+
+  await Analytics.paymentInitiated(chatId, parseInt(paymentAmount, 10));
+  await Analytics.funnelStep(chatId, "payment_initiated");
+
+  const { paymentId, paymentUrl } = await createYooKassaPayment(chatId);
+  userStates.set(chatId, { ...state, email, paymentId, step: "awaiting_payment" });
+
+  await bot.sendMessage(chatId, "Для оплаты перейдите по ссылке ниже:", {
+    reply_markup: {
+      inline_keyboard: [[{ text: "Оплатить", url: paymentUrl }]],
+    },
+  });
 });
 
 async function handleSuccessfulPayment(chatId: number) {
@@ -293,7 +374,7 @@ async function handleSuccessfulPayment(chatId: number) {
 
   await Analytics.paymentSuccess(
     chatId,
-    parseInt(paymentAmount),
+    parseInt(paymentAmount, 10),
     state?.paymentId || "unknown"
   );
   await Analytics.courseAccessGranted(chatId);
@@ -301,20 +382,25 @@ async function handleSuccessfulPayment(chatId: number) {
 
   userStates.set(chatId, { ...state!, hasPaid: true, step: "paid" });
 
+  const chat = await bot.getChat(chatId);
+  const telegramIdentity = chat.username ? `@${chat.username} (id: ${chatId})` : `id: ${chatId}`;
+
+  await notifyAdmins({
+    title: "Новая заявка: платный марафон (оплата успешна)",
+    chatId,
+    telegramIdentity,
+    email: state?.email || "email не указан",
+    paymentId: state?.paymentId,
+  });
+
   await sendVideoNoteFromFile(chatId, videoCourseGoodLuck);
-
   await sleep(2500);
-  await bot.sendMessage(chatId, "Доступ к курсу открыт! Перейдите по кнопке:", {
-    reply_markup: {
-      inline_keyboard: [[{ text: "Открыть курс", url: courseLink }]],
-    },
-  });
 
-  await bot.sendMessage(chatId, "Чат курса:", {
-    reply_markup: {
-      inline_keyboard: [[{ text: "Чат курса", url: chatLink }]],
-    },
-  });
+  await bot.sendMessage(
+    chatId,
+    `Спасибо за оплату! Доступ будет выдан в ближайшее время.\nПри вопросах напишите ${supportContact}`,
+    { reply_markup: channelKeyboard }
+  );
 }
 
 bot.onText(/\/myid/, async (msg) => {
@@ -323,28 +409,19 @@ bot.onText(/\/myid/, async (msg) => {
 
   await bot.sendMessage(
     chatId,
-    `👤 Привет, ${userName}!\n\n` +
-      `Твой Telegram ID: \`${chatId}\`\n\n` +
-      `Этот ID используется для идентификации в системе.`,
-    { parse_mode: "Markdown" }
+    `Твой Telegram ID: ${chatId}. Пользователь: ${userName}`
   );
 });
 
 bot.onText(/\/paid (\d+)/, async (msg, match) => {
   const adminId = msg.from?.id;
-  const targetUserId = parseInt(match![1]);
-
-  const adminIds =
-    process.env.ADMIN_IDS?.split(",").map((id) => parseInt(id)) || [];
+  const targetUserId = parseInt(match![1], 10);
 
   if (adminIds.includes(adminId!)) {
     await handleSuccessfulPayment(targetUserId);
-    await bot.sendMessage(
-      msg.chat.id,
-      `✅ Доступ выдан пользователю ${targetUserId}`
-    );
+    await bot.sendMessage(msg.chat.id, `Доступ выдан пользователю ${targetUserId}`);
   } else {
-    await bot.sendMessage(msg.chat.id, "❌ У вас нет прав администратора");
+    await bot.sendMessage(msg.chat.id, "У вас нет прав администратора");
   }
 });
 
@@ -370,7 +447,7 @@ app.post("/webhook/yookassa", express.json(), async (req, res) => {
       } else {
         const chatIdFromMetadata = payment.metadata?.chatId;
         if (chatIdFromMetadata) {
-          const chatIdNum = parseInt(chatIdFromMetadata);
+          const chatIdNum = parseInt(chatIdFromMetadata, 10);
           await handleSuccessfulPayment(chatIdNum);
           processedPayments.add(paymentId);
         }
@@ -396,167 +473,16 @@ app.get("/payment/return", async (req, res) => {
     }
 
     if (!paymentId) {
-      res.send(`
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Платеж обрабатывается</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-              margin: 0;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            }
-            .container {
-              text-align: center;
-              background: white;
-              padding: 40px;
-              border-radius: 20px;
-              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-              max-width: 500px;
-            }
-            h1 { color: #333; margin: 0 0 20px 0; }
-            p { color: #666; line-height: 1.6; margin: 10px 0; }
-            .emoji { font-size: 64px; margin-bottom: 20px; }
-            .button {
-              display: inline-block;
-              margin-top: 20px;
-              padding: 15px 30px;
-              background: #667eea;
-              color: white;
-              text-decoration: none;
-              border-radius: 10px;
-              font-weight: bold;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="emoji">⏳</div>
-            <h1>Платеж обрабатывается</h1>
-            <p>Если оплата прошла успешно, доступ придет в Telegram-боте.</p>
-            <p>Если вы отменили оплату — просто вернитесь в бота.</p>
-            <a href="https://t.me/adelinClassBot" class="button">Открыть бота</a>
-          </div>
-        </body>
-        </html>
-      `);
+      res.send("<h1>Платеж обрабатывается</h1><p>Вернитесь в Telegram-бота.</p>");
       return;
     }
 
     if (!isSuccess) {
-      res.send(`
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Оплата не завершена</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-              margin: 0;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            }
-            .container {
-              text-align: center;
-              background: white;
-              padding: 40px;
-              border-radius: 20px;
-              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-              max-width: 500px;
-            }
-            h1 { color: #E53935; margin: 0 0 20px 0; }
-            p { color: #666; line-height: 1.6; margin: 10px 0; }
-            .emoji { font-size: 64px; margin-bottom: 20px; }
-            .button {
-              display: inline-block;
-              margin-top: 20px;
-              padding: 15px 30px;
-              background: #667eea;
-              color: white;
-              text-decoration: none;
-              border-radius: 10px;
-              font-weight: bold;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="emoji">❌</div>
-            <h1>Оплата не завершена</h1>
-            <p>Вы отменили оплату или она еще не прошла.</p>
-            <p>Вернитесь в бот и попробуйте снова.</p>
-            <a href="https://t.me/adelinClassBot" class="button">Открыть бота</a>
-          </div>
-        </body>
-        </html>
-      `);
+      res.send("<h1>Оплата не завершена</h1><p>Вернитесь в Telegram-бота и попробуйте снова.</p>");
       return;
     }
 
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Оплата прошла успешно!</title>
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 100vh;
-          margin: 0;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .container {
-          text-align: center;
-          background: white;
-          padding: 40px;
-          border-radius: 20px;
-          box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-          max-width: 500px;
-        }
-        h1 { color: #4CAF50; margin: 0 0 20px 0; }
-        p { color: #666; line-height: 1.6; margin: 10px 0; }
-        .emoji { font-size: 64px; margin-bottom: 20px; }
-        .button {
-          display: inline-block;
-          margin-top: 20px;
-          padding: 15px 30px;
-          background: #667eea;
-          color: white;
-          text-decoration: none;
-          border-radius: 10px;
-          font-weight: bold;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="emoji">🎉</div>
-        <h1>Оплата прошла успешно!</h1>
-        <p>Спасибо за покупку курса!</p>
-        <p>Доступ придет в Telegram-боте в течение 1-2 минут.</p>
-        <p><strong>Вернитесь в Telegram и проверьте сообщения от бота.</strong></p>
-        <a href="https://t.me/adelinClassBot" class="button">Открыть бота</a>
-      </div>
-    </body>
-    </html>
-  `);
+    res.send("<h1>Оплата прошла успешно</h1><p>Вернитесь в Telegram-бота.</p>");
   } catch (error) {
     console.error("Ошибка проверки статуса оплаты:", error);
     res.status(500).send("Internal Server Error");
@@ -572,8 +498,8 @@ app.get("/health", (req, res) => {
 });
 
 app.listen(webhookPort, () => {
-  console.log(`🤖 Бот запущен!`);
-  console.log(`🌐 Webhook сервер запущен на порту ${webhookPort}`);
-  console.log(`📍 Webhook URL: ${serverUrl}/webhook/yookassa`);
-  console.log(`✅ Success URL: ${serverUrl}/payment/success`);
+  console.log(`Bot started`);
+  console.log(`Webhook server on ${webhookPort}`);
+  console.log(`Webhook URL: ${serverUrl}/webhook/yookassa`);
+  console.log(`Success URL: ${serverUrl}/payment/success`);
 });
