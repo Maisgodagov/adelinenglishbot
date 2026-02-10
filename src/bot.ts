@@ -10,7 +10,8 @@ import path from "path";
 dotenv.config();
 
 const token = process.env.BOT_TOKEN!;
-const channelLink = process.env.CHANNEL_LINK || "https://t.me/adelengl";
+const channelLink =
+  process.env.MARATHON_CHAT_LINK || "https://t.me/+18GWR5r4wm04OTIy";
 const supportContact = process.env.SUPPORT_CONTACT || "@adelinteacher";
 const mediaDir = process.env.MEDIA_DIR || "/var/www/adelinenglishbot/media";
 const adminIds =
