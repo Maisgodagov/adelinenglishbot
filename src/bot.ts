@@ -312,8 +312,7 @@ bot.on("callback_query", async (query) => {
       userStates.set(chatId, { ...state, step: "awaiting_free_email" });
       await bot.sendMessage(
         chatId,
-        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону.",
-        { reply_markup: channelKeyboard }
+        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону."
       );
       break;
 
@@ -370,8 +369,7 @@ bot.on("callback_query", async (query) => {
 
       await bot.sendMessage(
         chatId,
-        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону.",
-        { reply_markup: channelKeyboard }
+        "Ответным сообщением напишите свою почту, она нужна для выдачи доступа к марафону."
       );
       break;
   }
@@ -419,6 +417,9 @@ bot.on("message", async (msg) => {
         `Пароль: ${password}\n` +
         `Ссылка на марафон: ${courseLinkFromAdmin}`
     );
+    await bot.sendMessage(request.userChatId, "Чат марафона:", {
+      reply_markup: channelKeyboard,
+    });
 
     request.issued = true;
     accessRequests.set(request.requestId, request);
@@ -459,8 +460,7 @@ bot.on("message", async (msg) => {
 
     await bot.sendMessage(
       chatId,
-      "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте.",
-      { reply_markup: channelKeyboard }
+      "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте."
     );
     return;
   }
@@ -508,8 +508,7 @@ async function handleSuccessfulPayment(chatId: number) {
 
   await bot.sendMessage(
     chatId,
-    "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте.",
-    { reply_markup: channelKeyboard }
+    "Спасибо! Доступ придет в этом боте в ближайшее время, пожалуйста ожидайте."
   );
 }
 
