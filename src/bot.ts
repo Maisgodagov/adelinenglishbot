@@ -29,6 +29,14 @@ const yookassaSecretKey = process.env.YOOKASSA_SECRET_KEY!;
 const paymentAmount = process.env.PAYMENT_AMOUNT || "990.00";
 const webhookPort = parseInt(process.env.WEBHOOK_PORT || "3000", 10);
 const serverUrl = process.env.SERVER_URL || "http://localhost:3000";
+const requestBotToken = process.env.REQUEST_BOT_TOKEN || "";
+const requestBotChatId = process.env.REQUEST_BOT_CHAT_ID || "";
+const requestApiKey = process.env.REQUEST_API_KEY || "";
+const requestAllowedOrigin = process.env.REQUEST_ALLOWED_ORIGIN || "*";
+const requestAdminId = parseInt(process.env.REQUEST_ADMIN_ID || "922488787", 10);
+const leadRecipientsFile =
+  process.env.LEAD_RECIPIENTS_FILE ||
+  path.join(process.cwd(), "lead-recipients.json");
 
 const checkout = new YooCheckout({
   shopId: yookassaShopId,
@@ -71,12 +79,138 @@ const processedPayments = new Set<string>();
 const orderToPaymentId = new Map<string, string>();
 const accessRequests = new Map<string, AccessRequest>();
 const adminGrantStates = new Map<number, AdminGrantState>();
+const leadRecipientIds = new Set<number>();
 
 const bot = new TelegramBot(token, { polling: true });
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+function loadLeadRecipients() {
+  try {
+    if (!fs.existsSync(leadRecipientsFile)) return;
+    const raw = fs.readFileSync(leadRecipientsFile, "utf-8");
+    const list = JSON.parse(raw) as number[];
+    list.forEach((id) => {
+      if (Number.isInteger(id)) leadRecipientIds.add(id);
+    });
+  } catch (error) {
+    console.error("Failed to load lead recipients:", error);
+  }
+}
+
+function persistLeadRecipients() {
+  try {
+    fs.writeFileSync(
+      leadRecipientsFile,
+      JSON.stringify(Array.from(leadRecipientIds), null, 2),
+      "utf-8"
+    );
+  } catch (error) {
+    console.error("Failed to persist lead recipients:", error);
+  }
+}
+
+function rememberLeadRecipient(chatId: number) {
+  if (!leadRecipientIds.has(chatId)) {
+    leadRecipientIds.add(chatId);
+    persistLeadRecipients();
+  }
+}
+
+type SiteRequestPayload = {
+  name?: string;
+  phone?: string;
+  material?: string;
+  lengthM?: number | string;
+  widthM?: number | string;
+  density?: number | string;
+  xPrice?: number | string;
+  total?: number | string;
+};
+
+function setRequestCorsHeaders(req: express.Request, res: express.Response) {
+  const allowedOrigin = resolveAllowedOrigin(req.header("Origin") || undefined);
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Api-Key");
+}
+
+function normalizeOrigin(origin: string): string {
+  return origin.replace(/\/$/, "").toLowerCase();
+}
+
+function resolveAllowedOrigin(originHeader?: string): string {
+  if (!originHeader || requestAllowedOrigin === "*") return requestAllowedOrigin;
+
+  const incoming = normalizeOrigin(originHeader);
+  const allowedFromEnv = requestAllowedOrigin
+    .split(",")
+    .map((o) => normalizeOrigin(o.trim()))
+    .filter(Boolean);
+
+  const defaults = ["https://napolniteli37.ru", "http://localhost:5173"];
+  const allowed = new Set([...defaults, ...allowedFromEnv]);
+
+  if (allowed.has(incoming)) return originHeader;
+  return defaults[0];
+}
+
+async function sendSiteRequestToTelegram(payload: SiteRequestPayload): Promise<void> {
+  const recipients = [requestAdminId];
+  if (!Number.isInteger(requestAdminId)) {
+    throw new Error("REQUEST_ADMIN_ID is missing or invalid");
+  }
+
+  const text = [
+    "Новая заявка с сайта Napolniteli37.ru",
+    "",
+    `Имя: ${payload.name || "-"}`,
+    `Телефон: ${payload.phone || "-"}`,
+    "",
+    "Параметры расчета:",
+    `Наполнитель: ${payload.material || "-"}`,
+    `Длина, м: ${payload.lengthM || "-"}`,
+    `Ширина, м: ${payload.widthM || "-"}`,
+    `Плотность, г/м²: ${payload.density || "-"}`,
+    `Ставка X, ₽: ${payload.xPrice || "-"}`,
+    `Итого, ₽: ${payload.total || "-"}`,
+  ].join("\n");
+
+  const sendErrors: string[] = [];
+  for (const recipientId of recipients) {
+    try {
+      // Предпочитаем отдельного бота для заявок, если задан токен.
+      if (requestBotToken) {
+        const telegramResponse = await fetch(
+          `https://api.telegram.org/bot${requestBotToken}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: recipientId,
+              text,
+            }),
+          }
+        );
+
+        if (!telegramResponse.ok) {
+          const errText = await telegramResponse.text();
+          throw new Error(errText);
+        }
+      } else {
+        await bot.sendMessage(recipientId, text);
+      }
+    } catch (error) {
+      sendErrors.push(`chat ${recipientId}: ${String(error)}`);
+    }
+  }
+
+  if (sendErrors.length === recipients.length) {
+    throw new Error(`Failed to send to all recipients: ${sendErrors.join("; ")}`);
+  }
+}
 
 const startKeyboard = {
   inline_keyboard: [
@@ -220,6 +354,7 @@ async function createYooKassaPayment(
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const user = msg.from;
+  rememberLeadRecipient(chatId);
 
   await Analytics.botStart(chatId, user?.first_name, user?.last_name);
   userStates.set(chatId, { step: "start" });
@@ -231,6 +366,7 @@ bot.onText(/\/start/, async (msg) => {
 
 bot.on("callback_query", async (query) => {
   const chatId = query.message!.chat.id;
+  rememberLeadRecipient(chatId);
   const messageId = query.message!.message_id;
   const data = query.data;
   const state = userStates.get(chatId);
@@ -379,6 +515,7 @@ bot.on("message", async (msg) => {
   if (!msg.text || msg.text.startsWith("/")) return;
 
   const chatId = msg.chat.id;
+  rememberLeadRecipient(chatId);
 
   const adminGrantState = adminGrantStates.get(chatId);
   if (adminGrantState && adminIds.includes(chatId)) {
@@ -603,7 +740,64 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", bot: "running" });
 });
 
+app.options("/api/site-request", (req, res) => {
+  setRequestCorsHeaders(req, res);
+  res.status(204).send();
+});
+
+app.post("/api/site-request", async (req, res) => {
+  setRequestCorsHeaders(req, res);
+
+  try {
+    if (requestApiKey) {
+      const incomingKey = req.header("X-Api-Key") || "";
+      if (incomingKey !== requestApiKey) {
+        res.status(401).json({ ok: false, error: "unauthorized" });
+        return;
+      }
+    }
+
+    const body = req.body as SiteRequestPayload;
+    const name = String(body.name || "").trim();
+    const phone = String(body.phone || "").trim();
+    const phoneDigits = phone.replace(/\D/g, "");
+
+    if (name.length < 2) {
+      res.status(400).json({ ok: false, error: "invalid_name" });
+      return;
+    }
+
+    if (!phoneDigits.startsWith("7") || phoneDigits.length !== 11) {
+      res.status(400).json({ ok: false, error: "invalid_phone" });
+      return;
+    }
+
+    await sendSiteRequestToTelegram({
+      name,
+      phone,
+      material: body.material,
+      lengthM: body.lengthM,
+      widthM: body.widthM,
+      density: body.density,
+      xPrice: body.xPrice,
+      total: body.total,
+    });
+
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("Site request error:", error);
+    res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 app.listen(webhookPort, () => {
+  loadLeadRecipients();
+  if (requestBotChatId) {
+    const fallbackId = parseInt(requestBotChatId, 10);
+    if (!Number.isNaN(fallbackId)) {
+      leadRecipientIds.add(fallbackId);
+    }
+  }
   console.log("Bot started");
   console.log(`Webhook server on ${webhookPort}`);
   console.log(`Webhook URL: ${serverUrl}/webhook/yookassa`);
